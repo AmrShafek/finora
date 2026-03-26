@@ -32,6 +32,7 @@ __pycache__/
 # virtual env
 venv/
 .env
+.venv/
 
 # datasets
 *.csv
