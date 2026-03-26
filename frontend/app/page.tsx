@@ -1,4 +1,6 @@
+
 "use client";
+import FileUpload from "./components/FileUpload";
 import { useEffect, useState, useRef } from "react";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar,
@@ -24,6 +26,7 @@ export default function Dashboard() {
   const [kpis, setKpis]         = useState<any[]>([]);
   const [insights, setInsights] = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<string>("");
 
   // Chat state
   const [messages, setMessages] = useState<Message[]>([
@@ -36,7 +39,8 @@ export default function Dashboard() {
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+useEffect(() => {
+  const fetchData = () => {
     Promise.all([
       fetch(`${API}/revenue`).then(r => r.json()),
       fetch(`${API}/kpis`).then(r => r.json()),
@@ -55,8 +59,19 @@ export default function Dashboard() {
       })));
       setInsights(ins);
       setLoading(false);
+      setLastUpdated(new Date().toLocaleTimeString());
     });
-  }, []);
+  };
+
+  // Fetch immediately on load
+  fetchData();
+
+  // Then refresh every 30 seconds
+  const interval = setInterval(fetchData, 30000);
+
+  // Cleanup on unmount
+  return () => clearInterval(interval);
+}, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -170,6 +185,11 @@ export default function Dashboard() {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#00e4a0", boxShadow: "0 0 8px #00e4a0" }} />
           <span style={{ fontSize: 13, color: "rgba(0,228,160,0.7)", letterSpacing: 1 }}>Live • Salesforce CRM</span>
+          {lastUpdated && (
+  <span style={{ fontSize: 11, color: "rgba(180,210,200,0.4)", marginLeft: 8 }}>
+    Updated {lastUpdated}
+  </span>
+)}
         </div>
       </div>
 
@@ -474,6 +494,12 @@ export default function Dashboard() {
         ::-webkit-scrollbar-thumb { background: rgba(0,228,160,0.2); border-radius: 2px; }
         input::placeholder { color: rgba(180,210,200,0.3); }
       `}</style>
-    </div>
+              {/* ── DOCUMENT UPLOAD ── */}
+        <div style={{ marginTop: 24 }}>
+          <FileUpload />
+        </div>
+
+      </div>
+    
   );
 }

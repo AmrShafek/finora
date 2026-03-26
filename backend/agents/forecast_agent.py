@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel("gemini-2.5-flash")
+model = genai.GenerativeModel(" gemini-2.5-flash")
 
 def forecast_agent(data: str, patterns: str, question: str) -> str:
     """
@@ -32,5 +32,5 @@ Provide:
 
 Use specific numbers in your forecast. Base everything on the actual data provided.
 """
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
     return response.text

@@ -5,7 +5,9 @@ from sqlalchemy import text
 from database import get_db
 from pydantic import BaseModel
 from agents.supervisor import supervisor
+from upload_route import router as upload_router
 
+app = FastAPI(title="Finora API")
 app = FastAPI(title="Finora API")
 
 app.add_middleware(
@@ -15,6 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(upload_router)
 @app.get("/")
 def root():
     return {"message": "Finora API is running!"}
@@ -76,7 +79,13 @@ def ask(request: AskRequest, db: Session = Depends(get_db)):
         WHERE company_id = 1 ORDER BY month ASC
     """)).fetchall()
 
-    # Format for agents
+    # Fetch latest 20 individual expenses including OCR-uploaded ones
+    expenses_raw = db.execute(text("""
+        SELECT month, amount, category, description, created_at
+        FROM expenses WHERE company_id = 1
+        ORDER BY created_at DESC LIMIT 20
+    """)).fetchall()
+
     kpis_data = [
         {
             "year": str(r[0])[:4],
@@ -93,9 +102,21 @@ def ask(request: AskRequest, db: Session = Depends(get_db)):
         for r in revenue_raw
     ]
 
+    expenses_data = [
+        {
+            "month": str(r[0]),
+            "amount": float(r[1]),
+            "category": str(r[2]),
+            "description": str(r[3]),
+            "created_at": str(r[4]),
+        }
+        for r in expenses_raw
+    ]
+
     financial_data = {
         "kpis": kpis_data,
         "revenue": revenue_data,
+        "expenses": expenses_data,
     }
 
     # Run all 5 agents through the supervisor

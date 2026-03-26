@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel("gemini-2.5-flash")
+model = genai.GenerativeModel(" gemini-2.5-flash")
 
 def data_agent(question: str, db_summary: str) -> str:
     """
@@ -33,5 +33,5 @@ Respond with:
 
 Be concise and specific.
 """
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
     return response.text
