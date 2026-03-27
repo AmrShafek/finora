@@ -41,3 +41,4 @@ Keep the total response under 300 words. Be clear, confident, and helpful.
 """
     response = model.generate_content(prompt)
     return response.text
+    
