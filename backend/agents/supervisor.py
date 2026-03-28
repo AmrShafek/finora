@@ -70,3 +70,4 @@ Recent Quarterly Revenue (last 8 quarters):
             "insights": insights,
         }
     }
+    
