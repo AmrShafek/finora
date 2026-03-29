@@ -1,0 +1,22 @@
+# requirements_deep_agent.txt
+# Dependencies for the DeepAgent + DSPy + LangGraph refactor
+# Install with: pip install -r requirements_deep_agent.txt
+
+# ── Core LLM / Agent framework ────────────────────────────────────────────────
+dspy-ai>=2.4.0                  # DSPy typed LLM modules + signatures
+langgraph>=0.2.0                # LangGraph StateGraph + conditional edges
+langchain-core>=0.2.0           # LangChain base (required by langgraph)
+
+# ── Gemini / LiteLLM backend ──────────────────────────────────────────────────
+litellm>=1.40.0                 # LiteLLM — unified LLM provider adapter (used by DSPy)
+google-generativeai>=0.7.0      # Google Gemini SDK (used directly + via litellm)
+
+# ── Data validation & typing ──────────────────────────────────────────────────
+pydantic>=2.5.0                 # Pydantic v2 models used across all agents
+typing-extensions>=4.9.0        # TypedDict, Annotated backports for Python <3.12
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+loguru>=0.7.0                   # Structured logging used by all agents
+
+# ── Environment ───────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0            # .env file loading (optional, for local dev)

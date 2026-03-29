@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-import json
 import os
 import time
-from typing import Callable, Optional
+from typing import Optional, Annotated
 
 from loguru import logger
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, END
+from operator import add
 
-from .gemini_adapter import GeminiAdapter
+from .dspy_modules import (
+    BuildContextModule,
+    GenerateInsightsModule,
+    InsightNarrativeModule,
+)
 from .models import (
     InsightAgentState,
     InsightInput,
@@ -16,6 +22,7 @@ from .models import (
     SynthesisContext,
 )
 from .validators import validate_inputs, validate_insights
+from ..deep_agent import make_dspy_lm, FinancialJSONModule
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -182,33 +189,62 @@ Rules:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# LANGGRAPH STATE
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class InsightAgentGraphState(TypedDict):
+    """
+    LangGraph state for the 6-node InsightAgent graph.
+    node_history and errors use Annotated[list, add] for accumulation.
+    """
+    # Inputs
+    data:             str
+    patterns:         str
+    forecast:         str
+    question:         str
+    max_retries:      int
+    # Node 1
+    input_valid:      bool
+    input_errors:     list[str]
+    # Node 2 — SynthesisContext as dict
+    context:          Optional[dict]
+    # Node 3 / 4 — InsightOutput as dict
+    insights:         Optional[dict]
+    insights_valid:   bool
+    insights_errors:  list[str]
+    retry_count:      int
+    # Node 5
+    narrative:        str
+    # Graph control
+    node_history:     Annotated[list[dict], add]
+    errors:           Annotated[list[dict], add]
+    abort:            bool
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # AGENT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class InsightAgent:
     """
-    Production DeepAgent for financial insight synthesis.
+    Production InsightAgent — refactored to DeepAgent + DSPy + LangGraph.
 
-    Drop-in replacement for:
-        def insight_agent(data, patterns, forecast, question) -> str
+    ARCHITECTURE CHANGES:
+      GeminiAdapter    → FinancialJSONModule(dspy.LM)   [DSPy]
+      _execute_graph() → LangGraph StateGraph           [LangGraph]
+      retry inline     → graph cycle via conditional edge
 
-    Usage:
-        agent  = InsightAgent()              # reads GEMINI_API_KEY from env
-        result = await agent.run(data, patterns, forecast, question)
-
-        if result.success:
-            print(f"Health: {result.health_score}/10")
-            print(f"Answer: {result.direct_answer}")
-            for ins in result.insights:
-                print(f"  → {ins['title']}: {ins['evidence']}")
+    PUBLIC INTERFACE — unchanged:
+      agent  = InsightAgent()
+      result = await agent.run(data, patterns, forecast, question)
     """
 
     def __init__(
         self,
-        model:       str            = "gemini-2.5-flash",
-        api_key:     Optional[str]  = None,
-        max_retries: int            = 2,
-        temperature: float          = 0.1,
+        model:       str           = "gemini-2.5-flash",
+        api_key:     Optional[str] = None,
+        max_retries: int           = 2,
+        temperature: float         = 0.1,
     ):
         resolved_key = api_key or os.getenv("GEMINI_API_KEY", "")
         if not resolved_key:
@@ -221,12 +257,33 @@ class InsightAgent:
         self.max_retries = max_retries
         self.agent_name  = "InsightAgent"
 
-        self._gemini = GeminiAdapter(
-            api_key=resolved_key,
-            model_name=model,
-            temperature=temperature,
-            max_output_tokens=3000,
+        # ── DSPy: replaces GeminiAdapter (max_tokens=3000 preserved) ─────────
+        self._lm     = make_dspy_lm(
+            model=model, api_key=resolved_key,
+            temperature=temperature, max_tokens=3000,
         )
+        self._module = FinancialJSONModule(lm=self._lm)
+
+        # ── Agent-specific DSPy modules ───────────────────────────────────────
+        self._context_mod   = BuildContextModule(
+            json_module=self._module,
+            system_prompt=_SYSTEM,
+            context_prompt_template=_CONTEXT_PROMPT,
+        )
+        self._insights_mod  = GenerateInsightsModule(
+            json_module=self._module,
+            system_prompt=_SYSTEM,
+            insights_prompt_template=_INSIGHTS_PROMPT,
+            retry_addendum_template=_RETRY_ADDENDUM,
+        )
+        self._narrative_mod = InsightNarrativeModule(
+            json_module=self._module,
+            system_prompt=_SYSTEM,
+            narrative_prompt_template=_NARRATIVE_PROMPT,
+        )
+
+        # ── LangGraph: replaces _execute_graph() ─────────────────────────────
+        self._graph = self._build_graph()
 
     # ──────────────────────────────────────────────────────────
     # PUBLIC ENTRY POINT
@@ -239,18 +296,13 @@ class InsightAgent:
         forecast: str,
         question: str,
     ) -> InsightResult:
-        """
-        Exact same signature as the original insight_agent().
-
-        Returns InsightResult — typed, validated, with full audit trail.
-        """
+        """Exact same signature as the original insight_agent()."""
         t_start = time.perf_counter()
 
-        # Pre-validate with Pydantic before touching state
         try:
             validated = InsightInput(
                 data=data, patterns=patterns,
-                forecast=forecast, question=question
+                forecast=forecast, question=question,
             )
         except Exception as e:
             return InsightResult(
@@ -260,20 +312,31 @@ class InsightAgent:
                 duration_ms=round((time.perf_counter() - t_start) * 1000, 1),
             )
 
-        state = InsightAgentState(
-            data=validated.data,
-            patterns=validated.patterns,
-            forecast=validated.forecast,
-            question=validated.question,
-            max_retries=self.max_retries,
-        )
+        initial_state: InsightAgentGraphState = {
+            "data":            validated.data,
+            "patterns":        validated.patterns,
+            "forecast":        validated.forecast,
+            "question":        validated.question,
+            "max_retries":     self.max_retries,
+            "input_valid":     False,
+            "input_errors":    [],
+            "context":         None,
+            "insights":        None,
+            "insights_valid":  False,
+            "insights_errors": [],
+            "retry_count":     0,
+            "narrative":       "",
+            "node_history":    [],
+            "errors":          [],
+            "abort":           False,
+        }
 
         logger.info(f"🤖 [{self.agent_name}] Starting | model={self.model}")
         logger.info(f"   Q: {question[:80]}{'...' if len(question) > 80 else ''}")
 
-        state       = await self._execute_graph(state)
+        final_state = await self._graph.ainvoke(initial_state)
         duration_ms = round((time.perf_counter() - t_start) * 1000, 1)
-        result      = self._build_result(state, duration_ms)
+        result      = self._build_result(final_state, duration_ms)
 
         if result.success:
             logger.success(
@@ -281,267 +344,323 @@ class InsightAgent:
                 f"health={result.health_score}/10 | insights={len(result.insights)}"
             )
         else:
-            logger.error(
-                f"❌ [{self.agent_name}] {duration_ms}ms | errors={result.errors}"
-            )
+            logger.error(f"❌ [{self.agent_name}] {duration_ms}ms | errors={result.errors}")
 
         return result
 
     # ──────────────────────────────────────────────────────────
-    # GRAPH ENGINE
+    # LANGGRAPH GRAPH BUILDER
     # ──────────────────────────────────────────────────────────
 
-    async def _execute_graph(self, state: InsightAgentState) -> InsightAgentState:
-        graph: list[tuple[str, Callable, bool]] = [
-            ("validate_inputs",   self._node_validate_inputs,   True),
-            ("build_context",     self._node_build_context,     True),
-            ("generate_insights", self._node_generate_insights, True),
-            ("validate_insights", self._node_validate_insights, False),
-            ("enrich_narrative",  self._node_enrich_narrative,  False),
-            ("format_output",     self._node_format_output,     False),
-        ]
-
-        for node_name, node_fn, is_critical in graph:
-            t = time.perf_counter()
-            logger.debug(f"  ▶ Node [{node_name}]")
-
-            try:
-                state = await node_fn(state)
-                ms    = round((time.perf_counter() - t) * 1000, 1)
-                state.node_history.append(
-                    {"node": node_name, "status": "completed", "ms": ms}
-                )
-                logger.debug(f"  ✅ [{node_name}] {ms}ms")
-
-            except Exception as exc:
-                ms  = round((time.perf_counter() - t) * 1000, 1)
-                msg = f"{type(exc).__name__}: {exc}"
-                state.node_history.append(
-                    {"node": node_name, "status": "failed", "ms": ms, "error": msg}
-                )
-                state.errors.append({"node": node_name, "error": msg})
-                logger.error(f"  ❌ [{node_name}] FAILED: {msg}")
-                if is_critical:
-                    logger.error("  🛑 Critical node — aborting graph")
-                    break
-
-        return state
-
-    # ──────────────────────────────────────────────────────────
-    # NODE 1 — VALIDATE INPUTS
-    # ──────────────────────────────────────────────────────────
-
-    async def _node_validate_inputs(self, state: InsightAgentState) -> InsightAgentState:
-        state = validate_inputs(state)
-        if not state.input_valid:
-            raise ValueError(
-                "Input validation failed:\n"
-                + "\n".join(f"  • {e}" for e in state.input_errors)
-            )
-        logger.debug(
-            f"    inputs valid | data={len(state.data)}c "
-            f"patterns={len(state.patterns)}c "
-            f"forecast={len(state.forecast)}c"
-        )
-        return state
-
-    # ──────────────────────────────────────────────────────────
-    # NODE 2 — BUILD CONTEXT
-    # ──────────────────────────────────────────────────────────
-
-    async def _node_build_context(self, state: InsightAgentState) -> InsightAgentState:
+    def _build_graph(self):
         """
-        Gemini extracts structured key numbers from all three text inputs.
-        Gives Node 3 a clean view instead of three raw text blobs.
+        Compile the 6-node InsightAgent LangGraph StateGraph.
+
+        Topology:
+          validate_inputs → build_context → generate_insights
+            → validate_insights
+              → (invalid & retries left?) generate_insights  [retry cycle]
+              → enrich_narrative → format_output → END
         """
-        prompt = _CONTEXT_PROMPT.format(
-            data=state.data,
-            patterns=state.patterns,
-            forecast=state.forecast,
-        )
-        raw = await self._llm_json(prompt)
+        sg = StateGraph(InsightAgentGraphState)
 
+        sg.add_node("validate_inputs",   self._node_validate_inputs)
+        sg.add_node("build_context",     self._node_build_context)
+        sg.add_node("generate_insights", self._node_generate_insights)
+        sg.add_node("validate_insights", self._node_validate_insights)
+        sg.add_node("enrich_narrative",  self._node_enrich_narrative)
+        sg.add_node("format_output",     self._node_format_output)
+
+        sg.set_entry_point("validate_inputs")
+
+        sg.add_conditional_edges("validate_inputs",
+            lambda s: END if s.get("abort") else "build_context")
+        sg.add_conditional_edges("build_context",
+            lambda s: END if s.get("abort") else "generate_insights")
+        sg.add_conditional_edges("generate_insights",
+            lambda s: END if s.get("abort") else "validate_insights")
+        # Retry cycle: validate_insights → generate_insights
+        sg.add_conditional_edges(
+            "validate_insights",
+            lambda s: (
+                "generate_insights"
+                if not s.get("insights_valid") and s.get("retry_count", 0) < s.get("max_retries", 2)
+                else "enrich_narrative"
+            ),
+        )
+        sg.add_edge("enrich_narrative", "format_output")
+        sg.add_edge("format_output", END)
+
+        return sg.compile()
+
+    # ──────────────────────────────────────────────────────────
+    # NODE 1 — VALIDATE INPUTS  (no LLM)
+    # ──────────────────────────────────────────────────────────
+
+    async def _node_validate_inputs(self, state: InsightAgentGraphState) -> dict:
+        t = time.perf_counter()
         try:
-            state.context = SynthesisContext.model_validate(raw)
-        except Exception as e:
-            raise ValueError(f"Context validation failed: {e} | raw={raw}")
-
-        ctx = state.context
-        logger.debug(
-            f"    context: revenue={ctx.latest_revenue} "
-            f"margin={ctx.latest_profit_margin} "
-            f"health={ctx.overall_health_signal} "
-            f"anomaly={ctx.has_anomaly}"
-        )
-        return state
-
-    # ──────────────────────────────────────────────────────────
-    # NODE 3 — GENERATE INSIGHTS
-    # ──────────────────────────────────────────────────────────
-
-    async def _node_generate_insights(self, state: InsightAgentState) -> InsightAgentState:
-        """Core insight generation — Gemini synthesizes all findings."""
-        context_str = (
-            state.context.model_dump_json(indent=2)
-            if state.context else "{}"
-        )
-
-        prompt = _INSIGHTS_PROMPT.format(
-            context=context_str,
-            data=state.data,
-            patterns=state.patterns,
-            forecast=state.forecast,
-            question=state.question,
-        )
-
-        # On retry: add quality-error context for self-correction
-        if state.retry_count > 0 and state.insights_errors:
-            prompt += _RETRY_ADDENDUM.format(
-                errors="\n".join(f"  - {e}" for e in state.insights_errors)
+            tmp = InsightAgentState(
+                data=state["data"], patterns=state["patterns"],
+                forecast=state["forecast"], question=state["question"],
             )
+            tmp = validate_inputs(tmp)
+            ms  = round((time.perf_counter() - t) * 1000, 1)
+            if not tmp.input_valid:
+                err_msg = "Input validation failed: " + " | ".join(tmp.input_errors)
+                logger.error(f"  ❌ [validate_inputs] {err_msg}")
+                return {
+                    "input_valid":  False, "input_errors": tmp.input_errors,
+                    "node_history": [{"node": "validate_inputs", "status": "failed", "ms": ms}],
+                    "errors":       [{"node": "validate_inputs", "error": err_msg}],
+                    "abort":        True,
+                }
+            logger.debug(
+                f"    inputs valid | data={len(state['data'])}c "
+                f"patterns={len(state['patterns'])}c "
+                f"forecast={len(state['forecast'])}c ({ms}ms)"
+            )
+            return {
+                "input_valid":  True, "input_errors": [],
+                "node_history": [{"node": "validate_inputs", "status": "completed", "ms": ms}],
+                "abort":        False,
+            }
+        except Exception as exc:
+            ms  = round((time.perf_counter() - t) * 1000, 1)
+            msg = f"{type(exc).__name__}: {exc}"
+            return {
+                "input_valid":  False,
+                "node_history": [{"node": "validate_inputs", "status": "failed", "ms": ms, "error": msg}],
+                "errors":       [{"node": "validate_inputs", "error": msg}],
+                "abort":        True,
+            }
 
-        raw = await self._llm_json(prompt)
+    # ──────────────────────────────────────────────────────────
+    # NODE 2 — BUILD CONTEXT  (DSPy LM call)
+    # ──────────────────────────────────────────────────────────
 
+    async def _node_build_context(self, state: InsightAgentGraphState) -> dict:
+        """
+        LLM node: extract synthesis context from three text sources.
+        BEFORE: self._llm_json(_CONTEXT_PROMPT.format(...))
+        AFTER:  self._context_mod.acall(data=..., patterns=..., forecast=...)
+        """
+        t = time.perf_counter()
         try:
-            state.insights = InsightOutput.model_validate(raw)
-        except Exception as e:
-            raise ValueError(f"InsightOutput validation failed: {e} | raw={raw}")
+            raw = await self._context_mod.acall(
+                data=state["data"],
+                patterns=state["patterns"],
+                forecast=state["forecast"],
+            )
+            ctx = SynthesisContext.model_validate(raw)
+            ms  = round((time.perf_counter() - t) * 1000, 1)
+            logger.debug(
+                f"    context: rev={ctx.latest_revenue} "
+                f"margin={ctx.latest_profit_margin} "
+                f"health={ctx.overall_health_signal} ({ms}ms)"
+            )
+            return {
+                "context":      ctx.model_dump(),
+                "node_history": [{"node": "build_context", "status": "completed", "ms": ms}],
+                "abort":        False,
+            }
+        except Exception as exc:
+            ms  = round((time.perf_counter() - t) * 1000, 1)
+            msg = f"{type(exc).__name__}: {exc}"
+            logger.error(f"  ❌ [build_context] {msg}")
+            return {
+                "node_history": [{"node": "build_context", "status": "failed", "ms": ms, "error": msg}],
+                "errors":       [{"node": "build_context", "error": msg}],
+                "abort":        True,
+            }
 
-        ins = state.insights
-        logger.debug(
-            f"    insights: score={ins.health_score}/10 "
-            f"insights={len(ins.insights)} "
-            f"actions={len(ins.actions)}"
+    # ──────────────────────────────────────────────────────────
+    # NODE 3 — GENERATE INSIGHTS  (DSPy LM call)
+    # ──────────────────────────────────────────────────────────
+
+    async def _node_generate_insights(self, state: InsightAgentGraphState) -> dict:
+        """
+        LLM node: synthesize strategic insights for CFO.
+        On retry: passes insights_errors for self-correction.
+        BEFORE: self._llm_json(_INSIGHTS_PROMPT.format(...))
+        AFTER:  self._insights_mod.acall(...)
+        """
+        t = time.perf_counter()
+        try:
+            ctx_dict     = state.get("context") or {}
+            ctx_obj      = SynthesisContext.model_validate(ctx_dict) if ctx_dict else None
+            context_str  = ctx_obj.model_dump_json(indent=2) if ctx_obj else "{}"
+            retry_errors = state.get("insights_errors") if state.get("retry_count", 0) > 0 else None
+
+            raw = await self._insights_mod.acall(
+                context=context_str,
+                data=state["data"],
+                patterns=state["patterns"],
+                forecast=state["forecast"],
+                question=state["question"],
+                retry_errors=retry_errors,
+            )
+            ins = InsightOutput.model_validate(raw)
+            ms  = round((time.perf_counter() - t) * 1000, 1)
+            logger.debug(
+                f"    insights: score={ins.health_score}/10 "
+                f"insights={len(ins.insights)} actions={len(ins.actions)} ({ms}ms)"
+            )
+            return {
+                "insights":     ins.model_dump(),
+                "node_history": [{"node": "generate_insights", "status": "completed", "ms": ms}],
+                "abort":        False,
+            }
+        except Exception as exc:
+            ms  = round((time.perf_counter() - t) * 1000, 1)
+            msg = f"{type(exc).__name__}: {exc}"
+            logger.error(f"  ❌ [generate_insights] {msg}")
+            return {
+                "node_history": [{"node": "generate_insights", "status": "failed", "ms": ms, "error": msg}],
+                "errors":       [{"node": "generate_insights", "error": msg}],
+                "abort":        True,
+            }
+
+    # ──────────────────────────────────────────────────────────
+    # NODE 4 — VALIDATE INSIGHTS  (no LLM, retry via graph edge)
+    # ──────────────────────────────────────────────────────────
+
+    async def _node_validate_insights(self, state: InsightAgentGraphState) -> dict:
+        """
+        Quality checks on insight output.
+        Retry expressed as LangGraph conditional edge:
+          validate_insights → (invalid & retries left) → generate_insights
+        """
+        t            = time.perf_counter()
+        insights_raw = state.get("insights")
+        insights_obj = InsightOutput.model_validate(insights_raw) if insights_raw else None
+
+        tmp = InsightAgentState(
+            data=state["data"], patterns=state["patterns"],
+            forecast=state["forecast"], question=state["question"],
+            insights=insights_obj,
+            retry_count=state.get("retry_count", 0),
+            max_retries=state.get("max_retries", 2),
         )
-        return state
+        tmp = validate_insights(tmp)
+        ms  = round((time.perf_counter() - t) * 1000, 1)
 
-    # ──────────────────────────────────────────────────────────
-    # NODE 4 — VALIDATE INSIGHTS
-    # ──────────────────────────────────────────────────────────
-
-    async def _node_validate_insights(self, state: InsightAgentState) -> InsightAgentState:
-        """Quality checks — auto-retries Node 3 if output is low-quality."""
-        state = validate_insights(state)
-
-        if not state.insights_valid:
-            if state.retry_count <= state.max_retries:
-                logger.warning(
-                    f"    insights invalid (attempt {state.retry_count}/{state.max_retries}): "
-                    f"{state.insights_errors}"
-                )
-                state = await self._node_generate_insights(state)
-                state = validate_insights(state)
-
-            if not state.insights_valid:
-                logger.error(
-                    f"    insights still invalid after {state.retry_count} retries: "
-                    f"{state.insights_errors}"
-                )
+        if tmp.insights_valid:
+            logger.debug(f"    insights valid ✓ ({ms}ms)")
         else:
-            logger.debug("    insights valid ✓")
-
-        return state
-
-    # ──────────────────────────────────────────────────────────
-    # NODE 5 — ENRICH NARRATIVE
-    # ──────────────────────────────────────────────────────────
-
-    async def _node_enrich_narrative(self, state: InsightAgentState) -> InsightAgentState:
-        """Write a CFO-ready paragraph — replaces the original raw text output."""
-        if state.insights is None:
-            state.narrative = "Insights could not be generated due to earlier errors."
-            return state
-
-        ctx = state.context
-        prompt = _NARRATIVE_PROMPT.format(
-            insights_json=state.insights.model_dump_json(indent=2),
-            data_period=ctx.data_period if ctx else "unknown",
-            latest_revenue=ctx.latest_revenue if ctx else "unknown",
-            health_score=state.insights.health_score,
-            health_trend=state.insights.health_trend.value,
-            question=state.question,
-        )
-
-        raw = await self._llm_json(prompt)
-        state.narrative = raw.get("narrative", "").strip()
-
-        if not state.narrative:
-            state.narrative = state.insights.executive_summary
-
-        logger.debug(f"    narrative: {state.narrative[:80]}...")
-        return state
+            logger.warning(
+                f"    insights invalid (attempt {tmp.retry_count}/{tmp.max_retries}): "
+                f"{tmp.insights_errors} ({ms}ms)"
+            )
+        return {
+            "insights_valid":  tmp.insights_valid,
+            "insights_errors": tmp.insights_errors,
+            "retry_count":     tmp.retry_count,
+            "node_history":    [{"node": "validate_insights", "status": "completed", "ms": ms}],
+        }
 
     # ──────────────────────────────────────────────────────────
-    # NODE 6 — FORMAT OUTPUT
+    # NODE 5 — ENRICH NARRATIVE  (DSPy LM call)
     # ──────────────────────────────────────────────────────────
 
-    async def _node_format_output(self, state: InsightAgentState) -> InsightAgentState:
-        return state  # _build_result reads state directly
+    async def _node_enrich_narrative(self, state: InsightAgentGraphState) -> dict:
+        """LLM node: write CFO-ready executive narrative."""
+        t            = time.perf_counter()
+        insights_raw = state.get("insights")
+        if not insights_raw:
+            return {
+                "narrative":    "Insights could not be generated due to earlier errors.",
+                "node_history": [{"node": "enrich_narrative", "status": "skipped", "ms": 0}],
+            }
+        try:
+            ctx_dict     = state.get("context") or {}
+            ctx_obj      = SynthesisContext.model_validate(ctx_dict) if ctx_dict else None
+            insights_obj = InsightOutput.model_validate(insights_raw)
+
+            raw = await self._narrative_mod.acall(
+                insights_json=insights_obj.model_dump_json(indent=2),
+                data_period=ctx_obj.data_period if ctx_obj else "unknown",
+                latest_revenue=str(ctx_obj.latest_revenue) if ctx_obj else "unknown",
+                health_score=insights_obj.health_score,
+                health_trend=insights_obj.health_trend.value,
+                question=state["question"],
+            )
+            narrative = raw.get("narrative", "").strip() or insights_obj.executive_summary
+            ms        = round((time.perf_counter() - t) * 1000, 1)
+            logger.debug(f"    narrative: {narrative[:80]}... ({ms}ms)")
+            return {
+                "narrative":    narrative,
+                "node_history": [{"node": "enrich_narrative", "status": "completed", "ms": ms}],
+            }
+        except Exception as exc:
+            ms  = round((time.perf_counter() - t) * 1000, 1)
+            msg = f"{type(exc).__name__}: {exc}"
+            logger.error(f"  ❌ [enrich_narrative] {msg}")
+            return {
+                "node_history": [{"node": "enrich_narrative", "status": "failed", "ms": ms, "error": msg}],
+                "errors":       [{"node": "enrich_narrative", "error": msg}],
+            }
 
     # ──────────────────────────────────────────────────────────
-    # GEMINI LLM HELPER
+    # NODE 6 — FORMAT OUTPUT  (no LLM)
     # ──────────────────────────────────────────────────────────
 
-    async def _llm_json(self, user_prompt: str) -> dict:
-        return await self._gemini.generate_json(
-            system_prompt=_SYSTEM,
-            user_prompt=user_prompt,
-        )
+    async def _node_format_output(self, state: InsightAgentGraphState) -> dict:
+        t  = time.perf_counter()
+        ms = round((time.perf_counter() - t) * 1000, 1)
+        return {"node_history": [{"node": "format_output", "status": "completed", "ms": ms}]}
 
     # ──────────────────────────────────────────────────────────
     # RESULT BUILDER
     # ──────────────────────────────────────────────────────────
 
-    def _build_result(self, state: InsightAgentState, duration_ms: float) -> InsightResult:
-        input_ok  = state.input_valid
-        plan_ok   = state.insights_valid and state.insights is not None
-        no_errors = len(state.errors) == 0
-        success   = input_ok and plan_ok and no_errors
+    def _build_result(self, state: InsightAgentGraphState, duration_ms: float) -> InsightResult:
+        """Convert final LangGraph state dict into a typed InsightResult."""
+        insights_raw = state.get("insights")
+        insights_obj = InsightOutput.model_validate(insights_raw) if insights_raw else None
+        ctx_raw      = state.get("context")
+        ctx_obj      = SynthesisContext.model_validate(ctx_raw) if ctx_raw else None
+
+        success = (
+            state.get("input_valid", False)
+            and state.get("insights_valid", False)
+            and insights_obj is not None
+            and len(state.get("errors", [])) == 0
+        )
 
         base = InsightResult(
             success=success,
             model_used=self.model,
             duration_ms=duration_ms,
-            retry_count=state.retry_count,
-            node_history=state.node_history,
-            errors=state.errors,
-            narrative=state.narrative,
+            retry_count=state.get("retry_count", 0),
+            node_history=state.get("node_history", []),
+            errors=state.get("errors", []),
+            narrative=state.get("narrative", ""),
         )
 
-        if state.context:
-            ctx = state.context
-            base.latest_revenue       = ctx.latest_revenue
-            base.data_period          = ctx.data_period
-            base.forecast_growth_rate = ctx.forecast_growth_rate
-            if ctx.forecast_growth_rate is not None:
-                base.forecast_growth_pct = f"{ctx.forecast_growth_rate * 100:.1f}%"
+        if ctx_obj:
+            base.latest_revenue       = ctx_obj.latest_revenue
+            base.data_period          = ctx_obj.data_period
+            base.forecast_growth_rate = ctx_obj.forecast_growth_rate
+            if ctx_obj.forecast_growth_rate is not None:
+                base.forecast_growth_pct = f"{ctx_obj.forecast_growth_rate * 100:.1f}%"
 
-        if state.insights:
-            ins = state.insights
+        if insights_obj:
+            ins = insights_obj
             base.direct_answer      = ins.direct_answer
             base.key_risk           = ins.key_risk
             base.health_score       = ins.health_score
             base.health_explanation = ins.health_explanation
             base.health_trend       = ins.health_trend.value
             base.executive_summary  = ins.executive_summary
-
             base.insights = [
-                {
-                    "title":       i.title,
-                    "explanation": i.explanation,
-                    "evidence":    i.evidence,
-                    "urgency":     i.urgency.value,
-                }
+                {"title": i.title, "explanation": i.explanation,
+                 "evidence": i.evidence, "urgency": i.urgency.value}
                 for i in ins.insights
             ]
-
             base.actions = [
-                {
-                    "action":          a.action,
-                    "rationale":       a.rationale,
-                    "expected_impact": a.expected_impact,
-                    "urgency":         a.urgency.value,
-                }
+                {"action": a.action, "rationale": a.rationale,
+                 "expected_impact": a.expected_impact, "urgency": a.urgency.value}
                 for a in ins.actions
             ]
 
