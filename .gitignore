@@ -1,0 +1,46 @@
+# Environment files (passwords - never upload these!)
+backend/.env
+
+# Python
+backend/__pycache__/
+backend/agents/__pycache__/
+backend/.venv/
+*.pyc
+
+# Node
+frontend/node_modules/
+frontend/.next/
+
+# System
+.DS_Store
+Thumbs.db
+Demo/
+# Large files
+*.mp4
+*.pbix
+*.pbix.zip
+*.zip
+files/
+files (1)/
+TPE__1.pbix/
+FinoraVideo.mp4
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# virtual env
+venv/
+.env
+
+# datasets
+*.csv
+*.parquet
+
+# models
+*.pt
+*.pth
+*.ckpt
+
+# node
+node_modules/

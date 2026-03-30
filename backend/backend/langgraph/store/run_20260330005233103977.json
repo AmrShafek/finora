@@ -1,0 +1,70 @@
+{
+  "run_id": "20260330005233103977",
+  "question": "What was Salesforce best year?",
+  "result": {
+    "question": "What was Salesforce best year?",
+    "answer": "Salesforce's best year in terms of revenue was 2026, with a record $56.00B in revenue. This represents a significant increase from the previous year, 2025, which had $37.90B in revenue. This is the highest revenue recorded in the past 6 years, indicating strong growth and market performance.",
+    "details": {
+      "data_analysis": "{\"intent\": \"ranking\", \"time_period\": \"2021-2026\", \"tables_needed\": [\"kpis\"], \"filters\": {\"year\": \"BETWEEN 2021 AND 2026\"}, \"explanation\": \"Fetching the net profit for each year to determine the best year based on net profit.\"}",
+      "patterns": "{\"key_patterns\": [\"Revenue has consistently increased year over year, from $21.25B in 2021 to $56.00B in 2026.\", \"Net Profit fluctuated significantly, with a peak of $4.07B in 2021 and a low of $208.0M in 2023.\", \"Expenses have also increased but at a slower rate compared to revenue, from $20.80B in 2021 to $33.19B in 2026.\"], \"anomalies\": [\"The net profit margin in 2023 was unusually high at 70.0%, which is an outlier compared to other years.\"], \"trend_direction\": \"growing\", \"most_important\": \"The best year for Salesforce in terms of revenue was 2026 with $56.00B.\"}",
+      "forecast": "{\"short_term\": {\"period\": \"Q2 2026\", \"revenue\": 14000000.0, \"profit\": 3600000.0}, \"annual\": {\"year\": 2026, \"revenue\": 56000000.0, \"profit\": 22810000.0}, \"growth_rate\": 0.12, \"confidence\": \"Medium\", \"risks\": [\"Risk 1 \\u2014 The net profit margin in 2023 was unusually high at 70.0%, which could indicate volatility in future profitability.\", \"Risk 2 \\u2014 Incomplete expense and invoice data for certain periods may affect the accuracy of the forecast.\"], \"narrative\": \"The short-term forecast for Q2 2026 projects a revenue of $14,000,000.00, expenses of $10,400,000.00, and a net profit of $3,600,000.00. The annual forecast for 2026 anticipates a revenue of $56,000,000.00, expenses of $33,190,000.00, and a net profit of $22,810,000.00. The growth rate is estimated at 12%, driven by consistent year-over-year revenue growth and a slower rate of expense increase. The top two risks are the volatility in future profitability due to an unusually high net profit margin in 2023 and the incomplete expense and invoice data for certain periods. The confidence level in these forecasts is medium due to the uncertainty introduced by incomplete data.\"}",
+      "insights": "{\"direct_answer\": \"Salesforce's best year in terms of revenue was 2026, with a record $56.00B in revenue. This represents a significant increase from the previous year, 2025, which had $37.90B in revenue. This is the highest revenue recorded in the past 6 years, indicating strong growth and market performance.\", \"health_score\": 7, \"health_trend\": \"improving\", \"insights\": [{\"title\": \"Consistent Revenue Growth\", \"explanation\": \"Salesforce has shown a consistent increase in revenue year over year, from $21.25B in 2021 to $56.00B in 2026. This trend indicates a robust market position and effective business strategies.\", \"evidence\": \"Revenue increased from $21.25B in 2021 to $56.00B in 2026.\", \"urgency\": \"long_term\"}, {\"title\": \"Net Profit Fluctuations\", \"explanation\": \"Net profit has fluctuated significantly, with a peak of $4.07B in 2021 and a low of $208.0M in 2023. This volatility suggests potential issues in cost management or market conditions.\", \"evidence\": \"Net profit ranged from $208.0M in 2023 to $4.07B in 2021.\", \"urgency\": \"monitor\"}, {\"title\": \"Expenses Increasing Slower Than Revenue\", \"explanation\": \"Expenses have increased but at a slower rate compared to revenue, from $20.80B in 2021 to $33.19B in 2026. This indicates effective cost control measures.\", \"evidence\": \"Expenses increased from $20.80B in 2021 to $33.19B in 2026, while revenue increased from $21.25B to $56.00B in the same period.\", \"urgency\": \"long_term\"}], \"actions\": [{\"action\": \"Review and optimize cost management strategies\", \"rationale\": \"The significant fluctuation in net profit, particularly the unusually high margin in 2023, suggests potential inefficiencies or market volatility.\", \"expected_impact\": \"Stabilize net profit and improve overall financial health.\", \"urgency\": \"short_term\"}, {\"action\": \"Invest in areas driving revenue growth\", \"rationale\": \"The consistent increase in revenue indicates successful strategies that should be reinforced.\", \"expected_impact\": \"Maintain and potentially accelerate revenue growth.\", \"urgency\": \"long_term\"}], \"key_risk\": \"The net profit margin in 2023 was unusually high at 70.0%, which could indicate volatility in future profitability. This volatility poses a risk to financial stability and requires close monitoring.\", \"executive_summary\": \"Salesforce has demonstrated robust revenue growth and effective cost management, with a record revenue of $56.00B in 2026. However, fluctuations in net profit and medium forecast confidence indicate the need for strategic cost management and continued investment in growth areas.\"}"
+    },
+    "agents_succeeded": 5,
+    "duration_ms": 51269.0,
+    "node_history": [
+      {
+        "node": "validate_inputs",
+        "status": "failed",
+        "ms": 0.3,
+        "error": "Input validation failed: Question does not appear to be about financial data."
+      },
+      {
+        "node": "format_data",
+        "status": "completed",
+        "ms": 0.4
+      },
+      {
+        "node": "run_data_agent",
+        "status": "completed",
+        "ms": 5146.6
+      },
+      {
+        "node": "run_pattern_agent",
+        "status": "completed",
+        "ms": 4770.0
+      },
+      {
+        "node": "run_forecast_agent",
+        "status": "completed",
+        "ms": 19564.2
+      },
+      {
+        "node": "run_insight_agent",
+        "status": "completed",
+        "ms": 15036.4
+      },
+      {
+        "node": "run_report_agent",
+        "status": "completed",
+        "ms": 6750.9
+      },
+      {
+        "node": "validate_outputs",
+        "status": "completed",
+        "ms": 0.0
+      },
+      {
+        "node": "format_result",
+        "status": "completed",
+        "ms": 0.2
+      }
+    ],
+    "errors": [
+      {
+        "node": "validate_inputs",
+        "error": "Input validation failed: Question does not appear to be about financial data."
+      }
+    ]
+  }
+}

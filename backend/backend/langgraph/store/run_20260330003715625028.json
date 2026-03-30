@@ -1,0 +1,95 @@
+{
+  "run_id": "20260330003715625028",
+  "question": "What is revenue?",
+  "result": {
+    "question": "What is revenue?",
+    "answer": "",
+    "details": {
+      "data_analysis": "",
+      "patterns": "",
+      "forecast": "",
+      "insights": ""
+    },
+    "agents_succeeded": 0,
+    "duration_ms": 1.9,
+    "node_history": [
+      {
+        "node": "validate_inputs",
+        "status": "completed",
+        "ms": 0.6
+      },
+      {
+        "node": "format_data",
+        "status": "completed",
+        "ms": 0.0
+      },
+      {
+        "node": "run_data_agent",
+        "status": "failed",
+        "ms": 0.8,
+        "error": "'charmap' codec can't encode character '\\U0001f50d' in position 0: character maps to <undefined>"
+      },
+      {
+        "node": "run_pattern_agent",
+        "status": "failed",
+        "ms": 0.0,
+        "error": "'charmap' codec can't encode character '\\U0001f9e0' in position 0: character maps to <undefined>"
+      },
+      {
+        "node": "run_forecast_agent",
+        "status": "failed",
+        "ms": 0.0,
+        "error": "'charmap' codec can't encode character '\\U0001f52e' in position 0: character maps to <undefined>"
+      },
+      {
+        "node": "run_insight_agent",
+        "status": "failed",
+        "ms": 0.0,
+        "error": "'charmap' codec can't encode character '\\U0001f4a1' in position 0: character maps to <undefined>"
+      },
+      {
+        "node": "run_report_agent",
+        "status": "failed",
+        "ms": 0.0,
+        "error": "'charmap' codec can't encode character '\\U0001f4e3' in position 0: character maps to <undefined>"
+      },
+      {
+        "node": "validate_outputs",
+        "status": "completed",
+        "ms": 0.0
+      },
+      {
+        "node": "format_result",
+        "status": "failed",
+        "ms": 0.0,
+        "error": "'charmap' codec can't encode character '\\u2705' in position 0: character maps to <undefined>"
+      }
+    ],
+    "errors": [
+      {
+        "node": "run_data_agent",
+        "error": "'charmap' codec can't encode character '\\U0001f50d' in position 0: character maps to <undefined>"
+      },
+      {
+        "node": "run_pattern_agent",
+        "error": "'charmap' codec can't encode character '\\U0001f9e0' in position 0: character maps to <undefined>"
+      },
+      {
+        "node": "run_forecast_agent",
+        "error": "'charmap' codec can't encode character '\\U0001f52e' in position 0: character maps to <undefined>"
+      },
+      {
+        "node": "run_insight_agent",
+        "error": "'charmap' codec can't encode character '\\U0001f4a1' in position 0: character maps to <undefined>"
+      },
+      {
+        "node": "run_report_agent",
+        "error": "'charmap' codec can't encode character '\\U0001f4e3' in position 0: character maps to <undefined>"
+      },
+      {
+        "node": "format_result",
+        "error": "'charmap' codec can't encode character '\\u2705' in position 0: character maps to <undefined>"
+      }
+    ]
+  }
+}
