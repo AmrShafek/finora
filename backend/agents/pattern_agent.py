@@ -57,43 +57,47 @@ class PatternAgentResult:
 
 _SYSTEM = """You are a financial Pattern Detection Agent for Finora AI.
 You analyze financial data and detect patterns, anomalies, and trends.
+IMPORTANT: Always answer the user's specific question with relevant data points.
 Return ONLY valid JSON — no markdown, no explanation outside JSON.
 """
 
 _PATTERN_PROMPT = """
-Analyze financial data and detect patterns, anomalies, and trends.
+Analyze financial data to answer this specific question: "{question}"
 
 Financial data to analyze:
 {data}
 
-User question context: {question}
+Focus on:
+1. What does the data show about the question?
+2. Use specific numbers and percentages from the data
+3. Identify any anomalies or unusual changes
 
 Return EXACTLY this JSON:
 {{
   "key_patterns": [
-    "Pattern 1 with specific numbers",
-    "Pattern 2 with specific numbers",
-    "Pattern 3 (optional)"
+    "Answer point 1 with specific numbers addressing the question",
+    "Answer point 2 with specific numbers",
+    "Answer point 3 (optional)"
   ],
   "anomalies": [
-    "Anomaly 1 - specific unusual movement",
+    "Anomaly 1 - specific unusual movement related to the question",
     "Anomaly 2 (optional)"
   ],
   "trend_direction": "growing|declining|stable|volatile",
-  "most_important": "One sentence with the most critical finding",
+  "most_important": "One sentence answering the user's question directly",
   "seasonal_patterns": "Description of any seasonal patterns found",
   "year_over_year": "Year-over-year comparison summary"
 }}
 
 Rules:
-- Be specific with numbers and percentages
+- Answer the USER'S QUESTION directly with specific data
 - Include actual figures from the data
 - Return ONLY valid JSON
 """
 
 _RETRY_ADDENDUM = """
 
-IMPORTANT — Your previous response had these validation errors:
+IMPORTANT - Your previous response had these validation errors:
 {errors}
 
 Fix these errors in your response.
@@ -106,9 +110,13 @@ def _llm_json(prompt: str, system: str = _SYSTEM) -> dict:
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        max_tokens=3000
     )
-    raw = response.choices[0].message.content.strip()
+    msg_content = response.choices[0].message.content
+    if msg_content is None or msg_content.strip() == "":
+        raise ValueError("Empty response from model")
+    raw = msg_content.strip()
     
     if "```json" in raw:
         raw = raw.split("```json")[1].split("```")[0].strip()

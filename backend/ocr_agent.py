@@ -58,7 +58,11 @@ def extract_document_data(image_bytes: bytes, mime_type: str) -> dict:
         ]
     )
     
-    raw = response.choices[0].message.content.strip()
+    msg_content = response.choices[0].message.content
+    if msg_content is None or msg_content.strip() == "":
+        raise ValueError("Cannot read image (model does not support image input)")
+    
+    raw = msg_content.strip()
     
     if "```json" in raw:
         raw = raw.split("```json")[1].split("```")[0].strip()

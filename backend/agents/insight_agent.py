@@ -169,7 +169,7 @@ Return EXACTLY this JSON:
 
 _RETRY_ADDENDUM = """
 
-IMPORTANT — Previous response had these quality issues:
+IMPORTANT - Previous response had these quality issues:
 {errors}
 
 Fix ALL of these in your new response.
@@ -182,9 +182,13 @@ def _llm_json(prompt: str, system: str = _SYSTEM) -> dict:
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        max_tokens=3000
     )
-    raw = response.choices[0].message.content.strip()
+    msg_content = response.choices[0].message.content
+    if msg_content is None or msg_content.strip() == "":
+        raise ValueError("Empty response from model")
+    raw = msg_content.strip()
     
     if "```json" in raw:
         raw = raw.split("```json")[1].split("```")[0].strip()

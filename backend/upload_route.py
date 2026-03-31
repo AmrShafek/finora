@@ -28,7 +28,10 @@ async def upload_document(
     try:
         extracted = extract_document_data(image_bytes, file.content_type)
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"OCR failed: {str(e)}")
+        err_msg = str(e)
+        if "does not support image input" in err_msg:
+            raise HTTPException(status_code=422, detail="Unable to process image. The AI model doesn't support this image format. Please try a different image.")
+        raise HTTPException(status_code=422, detail=f"Failed to read document: {err_msg}")
 
     # Validate required fields
     required = ["date", "amount", "category", "description"]

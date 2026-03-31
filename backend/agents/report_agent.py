@@ -50,9 +50,14 @@ class ReportAgentState:
 class ReportAgentResult:
     success: bool = False
     text: str = ""
+    executive_summary: str = ""
     direct_answer: str = ""
     key_findings: list = field(default_factory=list)
+    evidence: list = field(default_factory=list)
+    detailed_insights: list = field(default_factory=list)
     recommendations: list = field(default_factory=list)
+    risk_assessment: list = field(default_factory=list)
+    financial_health: dict = field(default_factory=dict)
     summary_sentence: str = ""
     word_count: int = 0
     model_used: str = ""
@@ -62,18 +67,20 @@ class ReportAgentResult:
     errors: list = field(default_factory=list)
 
 
-_SYSTEM = """You are a financial report writer for Finora AI.
-Transform technical agent outputs into clear, professional reports for business users.
+_SYSTEM = """You are a senior financial report writer for Finora AI.
+Transform technical agent outputs into comprehensive, detailed reports for business executives.
 Rules:
   - Answer the user's question directly in the first paragraph
+  - Provide deep analysis with multiple data points and evidence
+  - Include detailed findings, evidence, and insights
   - Plain English — no jargon
-  - Total under 300 words
+  - Total under 3000 words
   - Never invent numbers not present in the inputs
 Return ONLY valid JSON — no markdown fences, no explanation outside JSON.
 """
 
 _PLAN_PROMPT = """
-Before writing, create a content plan.
+Before writing, create a comprehensive content plan.
 
 User question: "{question}"
 Content available: data_analysis ({da_len}c), patterns ({pat_len}c), forecast ({fc_len}c), insights ({ins_len}c)
@@ -81,17 +88,18 @@ Content available: data_analysis ({da_len}c), patterns ({pat_len}c), forecast ({
 Return EXACTLY this JSON:
 {{
   "question_type": "trend|forecast|comparison|risk|performance|general",
-  "direct_answer_point": "the single most important fact that answers the question (≤ 20 words)",
-  "top_findings": ["Finding 1", "Finding 2", "Finding 3"],
-  "top_recommendations": ["Action 1", "Action 2"],
+  "direct_answer_point": "the key fact that answers the question (≤ 30 words)",
+  "top_findings": ["Finding 1", "Finding 2", "Finding 3", "Finding 4", "Finding 5"],
+  "evidence": ["Evidence 1 with specific data", "Evidence 2 with specific data", "Evidence 3"],
+  "top_recommendations": ["Action 1", "Action 2", "Action 3", "Action 4"],
   "key_number": "most important number or null",
-  "word_limit": 300,
+  "word_limit": 3000,
   "tone": "professional"
 }}
 """
 
 _WRITE_PROMPT = """
-Write the report following this plan.
+Write a comprehensive, detailed financial report covering all aspects.
 
 Plan: {plan}
 
@@ -103,33 +111,71 @@ INSIGHTS: {insights}
 
 User question: "{question}"
 
-Return EXACTLY this JSON:
+Return EXACTLY this JSON with comprehensive details:
 {{
-  "direct_answer": "2-3 sentences directly answering the question. Include {key_number}. Plain English.",
+  "executive_summary": "5-6 sentence comprehensive summary covering all key aspects of the financial position",
+  "direct_answer": "3-4 sentences directly answering the question with specific numbers and context",
   "key_findings": [
-    "Finding with specific number",
-    "Finding with specific number"
+    "Detailed finding 1: specific metric, comparison, and what it means",
+    "Detailed finding 2: trend analysis with percentage change",
+    "Detailed finding 3: pattern interpretation and business impact",
+    "Detailed finding 4: risk assessment with supporting data",
+    "Detailed finding 5: opportunity identification with evidence",
+    "Detailed finding 6: year-over-year comparison insights",
+    "Detailed finding 7: operational efficiency metrics"
+  ],
+  "evidence": [
+    "Evidence from data: specific revenue figure with context",
+    "Evidence from patterns: trend direction and magnitude",
+    "Evidence from forecast: projected values with confidence",
+    "Evidence from insights: health score rationale",
+    "Evidence from expenses: category breakdown and analysis",
+    "Evidence from profit margin: calculation and interpretation"
+  ],
+  "detailed_insights": [
+    "Strategic insight 1: business implications",
+    "Strategic insight 2: market position analysis",
+    "Strategic insight 3: growth drivers identification",
+    "Strategic insight 4: cost optimization opportunities",
+    "Strategic insight 5: risk mitigation recommendations"
   ],
   "recommendations": [
-    "Verb-led action — specific",
-    "Second action"
+    "Immediate action with specific steps and timeline",
+    "Short-term recommendation with expected impact",
+    "Medium-term strategic initiative with resource requirements",
+    "Long-term recommendation for sustainable growth",
+    "Risk mitigation action with implementation plan"
   ],
-  "summary_sentence": "One closing sentence summarising the financial position."
+  "risk_assessment": [
+    "High priority risk with probability and impact",
+    "Medium priority risk with mitigation strategy",
+    "Low priority risk with monitoring recommendation"
+  ],
+  "financial_health": {{
+    "revenue_health": "Excellent/Good/Stable/Concerning with explanation",
+    "profit_health": "Excellent/Good/Stable/Concerning with explanation",
+    "margin_health": "Excellent/Good/Stable/Concerning with explanation",
+    "overall_score": "1-10 score with rationale"
+  }},
+  "summary_sentence": "2-3 sentence comprehensive summary of overall financial position and outlook."
 }}
 
 RULES:
-- Total word count across all fields: UNDER 300
-- direct_answer: min 20 chars
-- Each finding: ≥ 5 chars, include a number
-- Each recommendation: ≥ 10 chars, starts with verb
-- summary_sentence: exactly 1 sentence
+- Total word count across all fields: UNDER 3000
+- direct_answer: min 50 chars, include specific numbers
+- executive_summary: min 100 chars
+- Each finding: ≥ 30 chars with specific numbers and interpretation
+- Each evidence: ≥ 25 chars with specific data references
+- Each recommendation: ≥ 25 chars with specific actions
+- summary_sentence: 2-3 sentences
+- Include ALL findings, evidence, insights, and recommendations requested
 """
 
 _RETRY_ADDENDUM = """
 
 PREVIOUS REPORT FAILED THESE CHECKS:
 {errors}
-Fix all issues. Keep total words under 300.
+Fix all issues. Make the report more comprehensive with more details, evidence, and insights. Keep total words under 3000.
 """
 
 
@@ -139,7 +185,8 @@ def _llm_json(prompt: str, system: str = _SYSTEM) -> dict:
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        max_tokens=3000
     )
     raw = response.choices[0].message.content.strip()
     
@@ -207,11 +254,11 @@ def validate_report(state: ReportAgentState) -> ReportAgentState:
         errors.append("summary_sentence is too short.")
     
     word_count = len(out.get("direct_answer", "").split()) + \
-                 len(out.get("key_findings", [])) + \
-                 len(out.get("recommendations", [])) + \
+                 sum(len(f.split()) for f in out.get("key_findings", [])) + \
+                 sum(len(r.split()) for r in out.get("recommendations", [])) + \
                  len(out.get("summary_sentence", "").split())
     
-    if word_count > 350:
+    if word_count > 3500:
         errors.append(f"Report is too long ({word_count} words).")
     
     if errors:
@@ -329,19 +376,86 @@ class ReportAgent:
             return state
         
         r = state.report
-        lines = [r.get("direct_answer", ""), ""]
+        lines = []
         
+        # Executive Summary
+        if r.get("executive_summary"):
+            lines.append("=" * 50)
+            lines.append("EXECUTIVE SUMMARY")
+            lines.append("=" * 50)
+            lines.append(r["executive_summary"])
+            lines.append("")
+        
+        # Direct Answer
+        if r.get("direct_answer"):
+            lines.append("=" * 50)
+            lines.append("DIRECT ANSWER")
+            lines.append("=" * 50)
+            lines.append(r["direct_answer"])
+            lines.append("")
+        
+        # Key Findings
         if r.get("key_findings"):
-            lines.append("Key findings:")
-            lines += [f"- {f}" for f in r["key_findings"]]
+            lines.append("=" * 50)
+            lines.append("KEY FINDINGS & ANALYSIS")
+            lines.append("=" * 50)
+            for i, finding in enumerate(r["key_findings"], 1):
+                lines.append(f"{i}. {finding}")
             lines.append("")
         
+        # Evidence
+        if r.get("evidence"):
+            lines.append("=" * 50)
+            lines.append("SUPPORTING EVIDENCE")
+            lines.append("=" * 50)
+            for i, ev in enumerate(r["evidence"], 1):
+                lines.append(f"{i}. {ev}")
+            lines.append("")
+        
+        # Detailed Insights
+        if r.get("detailed_insights"):
+            lines.append("=" * 50)
+            lines.append("STRATEGIC INSIGHTS")
+            lines.append("=" * 50)
+            for i, insight in enumerate(r["detailed_insights"], 1):
+                lines.append(f"{i}. {insight}")
+            lines.append("")
+        
+        # Financial Health
+        if r.get("financial_health"):
+            fh = r["financial_health"]
+            lines.append("=" * 50)
+            lines.append("FINANCIAL HEALTH SCORE")
+            lines.append("=" * 50)
+            lines.append(f"Overall Score: {fh.get('overall_score', 'N/A')}/10")
+            lines.append(f"Revenue Health: {fh.get('revenue_health', 'N/A')}")
+            lines.append(f"Profit Health: {fh.get('profit_health', 'N/A')}")
+            lines.append(f"Margin Health: {fh.get('margin_health', 'N/A')}")
+            lines.append("")
+        
+        # Risk Assessment
+        if r.get("risk_assessment"):
+            lines.append("=" * 50)
+            lines.append("RISK ASSESSMENT")
+            lines.append("=" * 50)
+            for i, risk in enumerate(r["risk_assessment"], 1):
+                lines.append(f"{i}. {risk}")
+            lines.append("")
+        
+        # Recommendations
         if r.get("recommendations"):
-            lines.append("Recommended actions:")
-            lines += [f"- {rec}" for f in r["recommendations"]]
+            lines.append("=" * 50)
+            lines.append("RECOMMENDATIONS")
+            lines.append("=" * 50)
+            for i, rec in enumerate(r["recommendations"], 1):
+                lines.append(f"{i}. {rec}")
             lines.append("")
         
+        # Summary
         if r.get("summary_sentence"):
+            lines.append("=" * 50)
+            lines.append("SUMMARY")
+            lines.append("=" * 50)
             lines.append(r["summary_sentence"])
         
         state.formatted_text = "\n".join(lines).strip()
@@ -362,14 +476,22 @@ class ReportAgent:
         
         if state.report:
             r = state.report
+            result.executive_summary = r.get("executive_summary", "")
             result.direct_answer = r.get("direct_answer", "")
             result.key_findings = r.get("key_findings", [])
+            result.evidence = r.get("evidence", [])
+            result.detailed_insights = r.get("detailed_insights", [])
             result.recommendations = r.get("recommendations", [])
+            result.risk_assessment = r.get("risk_assessment", [])
+            result.financial_health = r.get("financial_health", {})
             result.summary_sentence = r.get("summary_sentence", "")
             
             result.word_count = (
+                len(result.executive_summary.split()) +
                 len(result.direct_answer.split()) +
                 sum(len(f.split()) for f in result.key_findings) +
+                sum(len(e.split()) for e in result.evidence) +
+                sum(len(i.split()) for i in result.detailed_insights) +
                 sum(len(r.split()) for r in result.recommendations) +
                 len(result.summary_sentence.split())
             )

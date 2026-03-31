@@ -177,7 +177,7 @@ Return EXACTLY this JSON:
 
 _RETRY_ADDENDUM = """
 
-IMPORTANT — Previous forecast had these validation errors:
+IMPORTANT - Previous forecast had these validation errors:
 {errors}
 
 Fix ALL of these errors in your new response.
@@ -190,7 +190,8 @@ def _llm_json(prompt: str, system: str = _SYSTEM) -> dict:
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        max_tokens=3000
     )
     raw = response.choices[0].message.content.strip()
     

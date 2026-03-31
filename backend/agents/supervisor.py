@@ -384,9 +384,19 @@ class SupervisorAgent:
                 "errors": state.errors,
             }
         
+        # Check if user asked for a report
+        uses_report = "report" in state.question.lower()
+        
+        # Build answer based on whether report was requested
+        if uses_report:
+            answer = state.final_report or "I couldn't generate a report. Please try again."
+        else:
+            # Summarized response - extract key parts
+            answer = self._create_summary(state)
+        
         return {
             "question": state.question,
-            "answer": state.final_report or "I couldn't generate a response. Please try again.",
+            "answer": answer,
             "details": {
                 "data_analysis": state.data_analysis,
                 "patterns": state.patterns,
@@ -398,6 +408,82 @@ class SupervisorAgent:
             "node_history": state.node_history,
             "errors": state.errors,
         }
+    
+    def _create_summary(self, state: SupervisorState) -> str:
+        """Create a concise summary when report is not requested"""
+        parts = []
+        
+        # Parse and format data analysis
+        if state.data_analysis:
+            da = state.data_analysis.strip()
+            if da.startswith("{"):
+                try:
+                    da_obj = json.loads(da)
+                    if da_obj.get("direct_answer"):
+                        parts.append(da_obj["direct_answer"][:300])
+                    elif da_obj.get("answer"):
+                        parts.append(da_obj["answer"][:300])
+                except:
+                    da_lines = da.split('\n')[:3]
+                    for line in da_lines:
+                        if line.strip():
+                            parts.append(line.strip()[:200])
+            else:
+                # Plain text response
+                parts.append(da[:400])
+        
+        # Parse and format patterns
+        if state.patterns:
+            pat_str = state.patterns.strip()
+            if pat_str.startswith("{"):
+                try:
+                    pat = json.loads(pat_str)
+                    if pat.get("most_important"):
+                        parts.append(f"Answer: {pat['most_important'][:200]}")
+                    patterns = pat.get("key_patterns", [])
+                    if patterns:
+                        for p in patterns[:2]:
+                            parts.append(f"Detail: {p[:150]}")
+                    anomalies = pat.get("anomalies", [])
+                    if anomalies:
+                        for a in anomalies[:1]:
+                            parts.append(f"Anomaly: {a[:150]}")
+                except:
+                    parts.append(f"Patterns: {pat_str[:300]}")
+            else:
+                # Plain text response
+                parts.append(f"Analysis: {pat_str[:400]}")
+        
+        # Parse and format forecast
+        if state.forecast:
+            fc_str = state.forecast.strip()
+            if fc_str.startswith("{"):
+                try:
+                    fc = json.loads(fc_str)
+                    st = fc.get("short_term", {})
+                    if st.get("period"):
+                        parts.append(f"Forecast: {st.get('period')} - Revenue ${st.get('revenue', 0):,.0f}, Profit ${st.get('profit', 0):,.0f}")
+                except:
+                    parts.append(f"Forecast: {fc_str[:300]}")
+            else:
+                parts.append(f"Forecast: {fc_str[:400]}")
+        
+        # Parse and format insights
+        if state.insights:
+            ins_str = state.insights.strip()
+            if ins_str.startswith("{"):
+                try:
+                    ins = json.loads(ins_str)
+                    key_insights = ins.get("key_insights", [])
+                    if key_insights:
+                        for i in key_insights[:2]:
+                            parts.append(f"Insight: {i[:150]}")
+                except:
+                    parts.append(f"Insights: {ins_str[:300]}")
+            else:
+                parts.append(f"Insights: {ins_str[:400]}")
+        
+        return "\n\n".join(parts)[:600] if parts else "Analysis complete. Ask for a detailed report for more information."
 
 
 def supervisor(question: str, financial_data: dict) -> dict:
